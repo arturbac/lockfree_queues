@@ -47,8 +47,6 @@ int main()
                             } while( recived_count != number_of_messages_loc );
                            }
                            catch(...){}
-                           //SIGSEGV in release
-//                            BOOST_TEST( recived_count == number_of_messages_loc );
                            return recived_count;
                            };
                            

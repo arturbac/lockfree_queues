@@ -209,8 +209,7 @@ BOOST_AUTO_TEST_CASE( lock_free_fifo_test_3threads_2recv_1send, * boost::unit_te
                             } while( recived_count != number_of_messages_loc );
                            }
                            catch(...){}
-                           //SIGSEGV in release
-//                            BOOST_TEST( recived_count == number_of_messages_loc );
+                           BOOST_TEST( recived_count == number_of_messages_loc );
                            return recived_count;
                            };
                            
