@@ -20,7 +20,7 @@ struct message_t
 
   
 
-using lifo_type = lockfree::lifo_queue_t<message_t>;
+using afifo_queue_type = lockfree::afifo_queue_t<message_t>;
 
 static std::ostream & operator <<( std::ostream & stream, message_t sc )
   {
@@ -28,6 +28,43 @@ static std::ostream & operator <<( std::ostream & stream, message_t sc )
   return stream;
   }
   
+BOOST_AUTO_TEST_CASE( lock_free_apop_test_single )
+{
+  afifo_queue_type queue;
+  auto [it, succeed] { lockfree::queue_pull( queue ) };
+  
+  BOOST_TEST( !succeed );
+  BOOST_TEST( it.empty() );
+  
+  lockfree::queue_push( queue, message_t{0} );
+  std::tie(it, succeed) = lockfree::queue_pull( queue );
+  
+  message_t result;
+  std::tie(result,succeed) = lockfree::queue_pull(it);
+  
+  BOOST_TEST( succeed );
+  BOOST_TEST( result == (message_t{0}) );
+  
+  uint32_t i =1;
+  for( ; i!=5; ++i)
+    lockfree::queue_push( queue, message_t{i} );
+
+  BOOST_TEST( !queue.empty() );  
+  
+  std::tie(it, succeed) = lockfree::queue_pull( queue );
+  BOOST_TEST( succeed );
+  BOOST_TEST( !it.empty() );
+  
+  
+  for( i =1;!it.empty(); ++i )
+    {
+    std::tie(result,succeed) = lockfree::queue_pull(it);
+    BOOST_TEST( succeed );
+    BOOST_TEST( result == (message_t{i}) );
+    }
+}
+
+using lifo_type = lockfree::lifo_queue_t<message_t>;
 BOOST_AUTO_TEST_CASE( lock_free_lifo_test_single )
 {
   lifo_type queue;
@@ -35,7 +72,7 @@ BOOST_AUTO_TEST_CASE( lock_free_lifo_test_single )
   
   message_t result;
   bool res;
-  std::tie(result,res) = queue.pop();
+  std::tie(result,res) = lockfree::queue_pull( queue );
   BOOST_TEST( res );
   BOOST_TEST( result == (message_t{0}) );
   
@@ -51,7 +88,7 @@ BOOST_AUTO_TEST_CASE( lock_free_lifo_test_single )
   uint64_t sum {};
   while( !queue.empty() )
     {
-    auto [ result, succeed ] = queue.pop();
+    auto [ result, succeed ] = lockfree::queue_pull( queue );
     if( succeed )
         {
         BOOST_TEST( result.id < number_of_messages );
@@ -82,7 +119,7 @@ BOOST_AUTO_TEST_CASE( lock_free_lifo_test_2threads )
 //                              BOOST_TEST_CHECKPOINT( "last_message_nr" << last_message_nr);
                              if( !queue.empty() )
                                 {
-                                auto [ result, succeed ] = queue.pop();
+                                auto [ result, succeed ] = lockfree::queue_pull( queue );
                                 if( succeed )
                                   {
                                   BOOST_TEST( result.id < number_of_messages );
@@ -134,26 +171,26 @@ BOOST_AUTO_TEST_CASE( lock_free_fifo_test_single )
   
   message_t result;
   bool succeed;
-  std::tie(result,succeed) = lockfree::queue_pop( queue );
+  std::tie(result,succeed) = lockfree::queue_pull( queue );
   BOOST_TEST( succeed );
   BOOST_TEST( result == (message_t{0}) );
   
   queue.push( message_t { 1 } );
   queue.push( message_t { 2 } );
-  std::tie(result,succeed) = lockfree::queue_pop( queue );
+  std::tie(result,succeed) = lockfree::queue_pull( queue );
   BOOST_TEST( succeed );
   BOOST_TEST( result == (message_t{1}) );
   queue.push( message_t { 3 } );
   queue.push( message_t { 4 } );
-  std::tie(result,succeed) = lockfree::queue_pop( queue );
+  std::tie(result,succeed) = lockfree::queue_pull( queue );
   BOOST_TEST( succeed );
   BOOST_TEST( result == (message_t{2}) );
   
-  std::tie(result,succeed) = lockfree::queue_pop( queue );
+  std::tie(result,succeed) = lockfree::queue_pull( queue );
   BOOST_TEST( succeed );
   BOOST_TEST( result == (message_t{3}) );
   
-  std::tie(result,succeed) = lockfree::queue_pop( queue );
+  std::tie(result,succeed) = lockfree::queue_pull( queue );
   BOOST_TEST( succeed );
   BOOST_TEST( result == (message_t{4}) );
 }
@@ -167,7 +204,7 @@ BOOST_AUTO_TEST_CASE( lock_free_fifo_test_2threads )
                            {
                            uint32_t last_message_id{};
                            do{
-                              auto[ result, succeed ] = lockfree::queue_pop( queue );
+                              auto[ result, succeed ] = lockfree::queue_pull( queue );
                               if(succeed)
                                 {
                                 BOOST_TEST( result == (message_t{last_message_id}) );
@@ -203,7 +240,7 @@ BOOST_AUTO_TEST_CASE( lock_free_fifo_test_3threads_2recv_1send, * boost::unit_te
                            uint32_t recived_count{};
                            try {
                            do{
-                              auto [result, succeed] = lockfree::queue_pop( queue );
+                              auto [result, succeed] = lockfree::queue_pull( queue );
                               if( succeed )
                                 ++recived_count;
                             } while( recived_count != number_of_messages_loc );

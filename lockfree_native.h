@@ -290,11 +290,11 @@ namespace lockfree
     /// when queue is empty returns imediatly
     /// when queue is not empty it retries infinitie number of times until it succeeds or queue becomes empty
     ///@}
-    node_type * pop();
+    node_type * pull();
     
     ///\breif waits until pop succeeds with sleeping between retrys
     ///\param sleep_millisec time in miliseconds of sleeping
-    node_type * pop_wait( size_t sleep_millisec );
+    node_type * pull_wait( size_t sleep_millisec );
     };
 
   
@@ -318,7 +318,7 @@ namespace lockfree
 
   template<typename T>
   typename lifo_queue_internal_tmpl<T>::node_type * 
-  lifo_queue_internal_tmpl<T>::pop()
+  lifo_queue_internal_tmpl<T>::pull()
     {
     pointer_type head_to_dequeue{atomic_load(head_, memorder::relaxed)};
 
@@ -339,11 +339,11 @@ namespace lockfree
   
   template<typename T>
   typename lifo_queue_internal_tmpl<T>::node_type * 
-  lifo_queue_internal_tmpl<T>::pop_wait( size_t sleep_millisec )
+  lifo_queue_internal_tmpl<T>::pull_wait( size_t sleep_millisec )
     {
     for(;;)
       {
-      node_type * res = pop();
+      node_type * res = pull();
       if ( res != nullptr || finish_wating_ )
         return res;
 
@@ -380,7 +380,7 @@ namespace lockfree
     std::unique_ptr<node_type> result;
     if( ! this->empty() )
       {
-      result.reset( this->pop() );
+      result.reset( this->pull() );
       if(result)
         result->value = std::forward<user_obj_type &&>(user_data);
       }
@@ -394,7 +394,7 @@ namespace lockfree
     {
     while( !this->empty() )
       {
-      std::unique_ptr<node_type> node_to_free{ this->pop() };
+      std::unique_ptr<node_type> node_to_free{ this->pull() };
       }
     }
   
@@ -430,7 +430,7 @@ namespace lockfree
     lifo_queue_t & operator=( lifo_queue_t const & ) = delete;
     
     void push( user_obj_type && user_data );
-    std::pair<user_obj_type, bool> pop();
+    std::pair<user_obj_type, bool> pull();
     };
   
   template<typename T>
@@ -443,9 +443,9 @@ namespace lockfree
     
   template<typename T>
   std::pair<typename lifo_queue_t<T>::user_obj_type, bool>  
-  lifo_queue_t<T>::pop()
+  lifo_queue_t<T>::pull()
     {
-    std::unique_ptr<node_type> detached_node { base_type::pop() };
+    std::unique_ptr<node_type> detached_node { base_type::pull() };
     
     if( nullptr != detached_node )
       {
@@ -458,55 +458,71 @@ namespace lockfree
 
   //----------------------------------------------------------------------------------------------------------------------
   //
-  // apop_queue_internal_tmpl
-  // aggregated pop queue
+  // afifo_queue_result_iterator_tmpl
   //
   //----------------------------------------------------------------------------------------------------------------------
   template<typename USER_OBJ_TYPE>
-  class apop_queue_internal_tmpl;
+  class afifo_queue_internal_tmpl;
   
   template<typename USER_OBJ_TYPE>
-  class apop_queue_result_iterator_t
+  class afifo_queue_result_iterator_tmpl
     {
   public:
     using user_obj_type = USER_OBJ_TYPE;
     using node_type = lifo_node_t<user_obj_type>;
     using pointer_type = node_type *;
-    using parent_type = apop_queue_internal_tmpl<user_obj_type>;
     
-  private:
-    parent_type * parent_;
+  protected:
     node_type * linked_list_;
     
   public:
-    apop_queue_result_iterator_t() noexcept : parent_{}, linked_list_{} {}
-    apop_queue_result_iterator_t( apop_queue_result_iterator_t && rh ) noexcept ;
-    apop_queue_result_iterator_t & operator=( apop_queue_result_iterator_t && rh ) noexcept { swap( rh ); return *this; }
+    afifo_queue_result_iterator_tmpl() noexcept : linked_list_{} {}
+    explicit afifo_queue_result_iterator_tmpl( node_type * linked_list ) noexcept : linked_list_{linked_list} {}
+    afifo_queue_result_iterator_tmpl( afifo_queue_result_iterator_tmpl && rh ) noexcept ;
+    afifo_queue_result_iterator_tmpl & operator=( afifo_queue_result_iterator_tmpl && rh ) noexcept { swap( rh ); return *this; }
     
-    bool empty() const noexcept { return linked_list_ != nullptr; }
+    bool empty() const noexcept { return linked_list_ == nullptr; }
     
-    node_type * pop();
-    void swap( apop_queue_result_iterator_t && rh ) noexcept;
+    node_type * pull();
+    void swap( afifo_queue_result_iterator_tmpl & rh ) noexcept;
     };
     
   template<typename T>
-  apop_queue_result_iterator_t<T>::apop_queue_result_iterator_t( apop_queue_result_iterator_t && rh ) noexcept :
-      parent_{ rh.parent_}, linked_list_{rh.linked_list_} 
+  afifo_queue_result_iterator_tmpl<T>::afifo_queue_result_iterator_tmpl( afifo_queue_result_iterator_tmpl && rh ) noexcept :
+      linked_list_{rh.linked_list_} 
     {
-    rh.parent_ = nullptr;
     rh.linked_list_ = nullptr;
     }
   
   template<typename T>
-  void apop_queue_result_iterator_t<T>::swap( apop_queue_result_iterator_t && rh ) noexcept
+  void afifo_queue_result_iterator_tmpl<T>::swap( afifo_queue_result_iterator_tmpl & rh ) noexcept
     {
-    std::swap(parent_,rh.parent_);
     std::swap(linked_list_,rh.linked_list_);
     }
     
+  template<typename T>
+  typename afifo_queue_result_iterator_tmpl<T>::node_type *
+  afifo_queue_result_iterator_tmpl<T>::pull()
+    {
+    node_type * result {};
+    if( linked_list_ != nullptr )
+      {
+      result = linked_list_;
+      linked_list_ = linked_list_->next;
+      }
+    return result;
+    }
+    
+  //----------------------------------------------------------------------------------------------------------------------
+  //
+  // afifo_queue_internal_tmpl
+  // aggregated pop queue
+  //
+  //----------------------------------------------------------------------------------------------------------------------
+
   ///\brief lifo aggregated pop queue used internaly for node managment
   template<typename USER_OBJ_TYPE>
-  class apop_queue_internal_tmpl
+  class afifo_queue_internal_tmpl
     {
   public:
     using user_obj_type = USER_OBJ_TYPE;
@@ -526,10 +542,10 @@ namespace lockfree
     inline void        finish_waiting( bool value ) noexcept   { finish_wating_ = value ; }
     
   public:
-    apop_queue_internal_tmpl() : head_{} , size_{}, finish_wating_{} {}
-    ~apop_queue_internal_tmpl(){}
-    apop_queue_internal_tmpl( apop_queue_internal_tmpl const & ) = delete;
-    apop_queue_internal_tmpl & operator=( apop_queue_internal_tmpl const & ) = delete;
+    afifo_queue_internal_tmpl() : head_{} , size_{}, finish_wating_{} {}
+    ~afifo_queue_internal_tmpl(){}
+    afifo_queue_internal_tmpl( afifo_queue_internal_tmpl const & ) = delete;
+    afifo_queue_internal_tmpl & operator=( afifo_queue_internal_tmpl const & ) = delete;
     
   public:
     ///\brief enqueues supplyied node
@@ -540,16 +556,17 @@ namespace lockfree
     /// when queue is empty returns imediatly
     /// when queue is not empty it retries infinitie number of times until it succeeds or queue becomes empty
     ///@}
-    node_type * pop();
+    ///\returns linked list of nodes with fifo order
+    node_type * pull();
     
     ///\breif waits until pop succeeds with sleeping between retrys
     ///\param sleep_millisec time in miliseconds of sleeping
-    node_type * pop_wait( size_t sleep_millisec );
+    node_type * pull_wait( size_t sleep_millisec );
     static node_type * reverse( node_type * node_llist ) noexcept;
     };
     
   template<typename T>
-  void apop_queue_internal_tmpl<T>::push( node_type * next_node [[gnu::nonnull]] )
+  void afifo_queue_internal_tmpl<T>::push( node_type * next_node [[gnu::nonnull]] )
     {
     if( !finish_waiting() )
       {
@@ -567,50 +584,157 @@ namespace lockfree
     }
     
   template<typename T>
-  typename apop_queue_internal_tmpl<T>::node_type * 
-  apop_queue_internal_tmpl<T>::pop()
+  typename afifo_queue_internal_tmpl<T>::node_type * 
+  afifo_queue_internal_tmpl<T>::pull()
     {
     pointer_type head_to_dequeue{atomic_load(head_, memorder::relaxed)};
 
     for (;nullptr != head_to_dequeue; //return when nothing left in queue
             head_to_dequeue = atomic_load(head_, memorder::relaxed))                                                 // Keep trying until Dequeue is done
       {
-      bool deque_is_done = atomic_compare_exchange( &head_, head_to_dequeue, nullptr );//if swap succeeds new head is estabilished
+      bool deque_is_done = atomic_compare_exchange( &head_, head_to_dequeue, pointer_type{} );//if swap succeeds new head is estabilished
       if( deque_is_done )
         {
-        long size_do_sub { 1 };
+        int32_t size_do_sub { 1 };
         for( auto node{head_to_dequeue->next}; node != nullptr; node = node->next)
            ++size_do_sub; 
         atomic_sub_fetch(&size_, size_do_sub, memorder::relaxed );
         break;
         }
       }
-    
+    //reverse order for fifo, do any one needs here lifo order ?
     return reverse(head_to_dequeue);
     }
     
   template<typename T>
-  typename apop_queue_internal_tmpl<T>::node_type * 
-  apop_queue_internal_tmpl<T>::reverse( node_type * llist ) noexcept
+  typename afifo_queue_internal_tmpl<T>::node_type * 
+  afifo_queue_internal_tmpl<T>::reverse( node_type * llist ) noexcept
     {
     node_type * prev {};
     for( ; nullptr != llist; )
       {
       node_type * next { llist->next };
       llist->next = prev;
+      prev = llist;
       llist = next;
       }
-    return llist;
+    return prev;
     }
     
   //----------------------------------------------------------------------------------------------------------------------
   //
-  // apop_queue_t
+  // afifo_queue_t
   // aggregated pop queue
   //
   //----------------------------------------------------------------------------------------------------------------------
-  ///\brief lifo aggregated pop queue used internaly for node managment
+  template<typename USER_OBJ_TYPE>
+  class afifo_queue_t ;
   
+  template<typename USER_OBJ_TYPE>
+  class afifo_queue_result_iterator_t :
+      protected afifo_queue_result_iterator_tmpl<USER_OBJ_TYPE>
+    {
+  public:
+    using user_obj_type = USER_OBJ_TYPE;
+    using node_type = lifo_node_t<user_obj_type>;
+    using pointer_type = node_type *;
+    using parent_type = afifo_queue_t<user_obj_type>;
+    using base_type = afifo_queue_result_iterator_tmpl<user_obj_type>;
+    
+  protected:
+    parent_type * parent_;
+    
+  public:
+    afifo_queue_result_iterator_t() noexcept : base_type{}, parent_{} {}
+    afifo_queue_result_iterator_t(parent_type * parent,  std::unique_ptr<node_type> && llist) noexcept : 
+      base_type{llist.get()}, parent_{parent} 
+      { llist.release(); }
+      
+    afifo_queue_result_iterator_t( afifo_queue_result_iterator_t && rh ) noexcept ;
+    afifo_queue_result_iterator_t & operator=( afifo_queue_result_iterator_t && rh ) noexcept { swap( rh ); return *this; }
+    
+    using base_type::empty;
+    std::pair<user_obj_type, bool> pull();
+    void swap( afifo_queue_result_iterator_t & rh ) noexcept;
+    };
+    
+    
+  template<typename T>
+  afifo_queue_result_iterator_t<T>::afifo_queue_result_iterator_t( afifo_queue_result_iterator_t && rh ) noexcept :
+      base_type{ std::move(rh)}, parent_{ rh.parent_}
+    {
+    rh.parent_ = nullptr;
+    }
+  
+  template<typename T>
+  void afifo_queue_result_iterator_t<T>::swap( afifo_queue_result_iterator_t & rh ) noexcept
+    {
+    base_type::swap(rh);
+    std::swap(parent_,rh.parent_);
+    }
+    
+  template<typename T>
+  std::pair<typename afifo_queue_result_iterator_t<T>::user_obj_type, bool>
+  afifo_queue_result_iterator_t<T>::pull()
+    {
+    std::unique_ptr<node_type> detached_node { base_type::pull() };
+    
+    if( nullptr != detached_node )
+      {
+      std::pair<user_obj_type, bool> result { std::move( detached_node->value ),  true };
+      parent_->reuse_node( std::move(detached_node) );
+      return result;
+      }
+    return {};
+    }
+    
+  ///\brief lifo aggregated pop queue used internaly for node managment
+  template<typename USER_OBJ_TYPE>
+  class afifo_queue_t 
+      : public afifo_queue_internal_tmpl<USER_OBJ_TYPE>
+    {
+  public:
+    using user_obj_type =  USER_OBJ_TYPE;
+    using base_type = afifo_queue_internal_tmpl<user_obj_type>;
+    using reuse_node_queue_type = reuse_node_queue_t<user_obj_type>;
+    using node_type = typename base_type::node_type;
+    using pop_iterator_type = afifo_queue_result_iterator_t<user_obj_type>;
+  private:
+    reuse_node_queue_type free_node_to_reuse_;
+    
+  public:
+    afifo_queue_t() : base_type(), free_node_to_reuse_() {}
+    afifo_queue_t( afifo_queue_t const & ) = delete;
+    afifo_queue_t & operator=( afifo_queue_t const & ) = delete;
+    
+    void push( user_obj_type && user_data );
+    std::pair<pop_iterator_type, bool> pull();
+    
+    void reuse_node( std::unique_ptr<node_type> && to_reuse );
+    };
+    
+  template<typename T>
+  void afifo_queue_t<T>::push( user_obj_type && user_data )
+    {
+    std::unique_ptr<node_type> next_node { free_node_to_reuse_.construct_node(std::forward<user_obj_type &&>(user_data)) };
+    base_type::push( next_node.get() );
+    next_node.release();
+    }
+  
+  template<typename T>
+  std::pair<typename afifo_queue_t<T>::pop_iterator_type, bool>
+  afifo_queue_t<T>::pull()
+    {
+    std::unique_ptr<node_type> node_list { base_type::pull() };
+    bool success = static_cast<bool>(node_list);
+    return {pop_iterator_type{ this, std::move(node_list) }, success };
+    }
+  
+  template<typename T>
+  void afifo_queue_t<T>::reuse_node( std::unique_ptr<node_type> && to_reuse )
+    {
+    free_node_to_reuse_.reuse_node( std::move(to_reuse) );
+    }
   //----------------------------------------------------------------------------------------------------------------------
   //
   // fifo_queue_t
@@ -655,8 +779,8 @@ namespace lockfree
   
   public:
     void push( user_obj_type * user_data );
-    user_obj_type * pop();
-    user_obj_type * pop_wait( size_t sleep_tm );
+    user_obj_type * pull();
+    user_obj_type * pull_wait( size_t sleep_tm );
   };
   
 
@@ -683,7 +807,7 @@ namespace lockfree
         m_finish_wating = true;
 
       user_obj_type * any_data;
-      while ((any_data = pop()) != nullptr);
+      while ((any_data = pull()) != nullptr);
       delete m_head.get();
       }
     catch(...)
@@ -724,7 +848,7 @@ namespace lockfree
 
   template<typename T>
   typename fifo_queue_internal_tmpl<T>::user_obj_type *
-  fifo_queue_internal_tmpl<T>::pop()
+  fifo_queue_internal_tmpl<T>::pull()
     {
     user_obj_type * pvalue{};
     pointer_type head;
@@ -770,11 +894,11 @@ namespace lockfree
 
   template<typename T>
   typename fifo_queue_internal_tmpl<T>::user_obj_type *
-  fifo_queue_internal_tmpl<T>::pop_wait( size_t sleep_tm )
+  fifo_queue_internal_tmpl<T>::pull_wait( size_t sleep_tm )
     {
     for (;;)
       {
-      user_obj_type * res = pop();
+      user_obj_type * res = pull();
 
       if ( res != nullptr || m_finish_wating )
         return res;
@@ -809,7 +933,7 @@ namespace lockfree
 
         for(;;)
           {
-          envelope_type * any_data = base_type::pop();
+          envelope_type * any_data = base_type::pull();
           if( any_data )
             delete any_data;
           else
@@ -823,27 +947,33 @@ namespace lockfree
     void push( user_obj_type const & user_data ) {  base_type::push( new envelope_type( user_data ) ); }
     void push( user_obj_type && user_data ) { base_type::push( new envelope_type( std::move(user_data) ) ); }
     
-    std::pair<user_obj_type,bool> pop()
+    std::pair<user_obj_type,bool> pull()
       {
-      std::unique_ptr<envelope_type> envelope{ base_type::pop() };
+      std::unique_ptr<envelope_type> envelope{ base_type::pull() };
       if( envelope )  
         return { std::move(envelope->value), true };
       return {};
       }
       
-     std::pair<user_obj_type,bool> pop_wait( size_t sleep_tm )
+     std::pair<user_obj_type,bool> pull_wait( size_t sleep_tm )
       {
-      std::unique_ptr<envelope_type> envelope( base_type::pop_wait( sleep_tm ) );
+      std::unique_ptr<envelope_type> envelope( base_type::pull_wait( sleep_tm ) );
       if( envelope )  
         return { std::move(envelope->value), true };
       return {};
       }
     };
 
-  template<typename queue_type>
-  inline auto queue_pop( queue_type & queue )
+  template<typename queue_type, typename user_obj_type>
+  void queue_push( queue_type & queue, user_obj_type && user_data ) 
     {
-    return queue.pop();
+    queue.push( std::forward<user_obj_type &&>(user_data) ) ;
+    }
+   
+  template<typename queue_type>
+  inline auto queue_pull( queue_type & queue )
+    {
+    return queue.pull();
     }
 
 }

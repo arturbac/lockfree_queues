@@ -41,7 +41,7 @@ int main()
                            uint32_t recived_count{};
                            try {
                            do{
-                              auto [result, succeed] = lockfree::queue_pop( queue );
+                              auto [result, succeed] = lockfree::queue_pull( queue );
                               if( succeed )
                                 ++recived_count;
                             } while( recived_count != number_of_messages_loc );
