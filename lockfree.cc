@@ -123,8 +123,83 @@ BOOST_AUTO_TEST_CASE( lock_free_afifo_test_2threads )
   sender.get();
   printf("sender finished\n");
   reciver.get();
-  
+}
 
+BOOST_AUTO_TEST_CASE( lock_free_afifo_test_multiple_threads )
+{
+  afifo_queue_type queue;
+  uint64_t number_of_messages= 0xFFFF;
+  size_t number_of_senders = 16;
+  bool sender_finished {};
+  bool run {};
+  
+  
+  auto fn_dequeue = [&queue,number_of_messages,&sender_finished,&run,number_of_senders]()
+                    {
+                    while(! lockfree::atomic_load(run, lockfree::memorder::relaxed) )
+                      lockfree::sleep(1);
+                    
+                    uint32_t last_message_nr{};
+                    uint64_t sum {};
+                    uint64_t const expected_sum { ((number_of_messages-1)*number_of_messages)/2 * number_of_senders };
+                    do
+                    {
+                      if( !queue.empty() )
+                        {
+                        auto [ it, succeed ] = lockfree::queue_pull( queue );
+                        if( succeed )
+                          {
+                          for(;!it.empty();)
+                            {
+                            auto [ result, succeed2 ] = lockfree::queue_pull( it );
+                            BOOST_TEST( succeed2 );
+                            sum = sum + result.id;
+                            BOOST_TEST( expected_sum >= sum );
+                            ++last_message_nr;
+                            }
+                          }
+                        }
+                      else
+                        lockfree::sleep(1);
+                    }
+                    while( !sender_finished || !queue.empty() );
+                    
+                    BOOST_TEST( (number_of_messages * number_of_senders) == last_message_nr );
+                    
+                    BOOST_TEST( expected_sum == sum );
+                    };
+                    
+  auto fn_enqueue = [&queue,number_of_messages,&run]()
+                    {
+                    while(! lockfree::atomic_load(run, lockfree::memorder::relaxed) )
+                      lockfree::sleep(1);
+                    
+                    for( uint32_t i{}; i != number_of_messages; )
+                      {
+                      if( queue.size() <1000)
+                        {
+                        queue.push( message_t { i } );  
+                        ++i;
+                        }
+                      else
+                        lockfree::sleep(1);
+                      }
+                    };
+                    
+  auto reciver = std::async(std::launch::async, fn_dequeue );
+  
+  std::vector<std::future<void>> senders( number_of_senders );
+  for( auto & sender : senders )
+    sender = std::async(std::launch::async, fn_enqueue );
+  
+  lockfree::atomic_add_fetch( &run, true, lockfree::memorder::relaxed );
+  printf("flags set\n");
+
+  for( auto & sender : senders )
+    sender.get();
+  lockfree::atomic_add_fetch(&sender_finished,true, lockfree::memorder::relaxed );
+  printf("sender finished\n");
+  reciver.get();
 }
 
 using lifo_type = lockfree::lifo_queue_t<message_t>;
@@ -224,7 +299,76 @@ BOOST_AUTO_TEST_CASE( lock_free_lifo_test_2threads )
   
 
 }
-
+BOOST_AUTO_TEST_CASE( lock_free_lifo_test_multiple_threads )
+{
+  lifo_type queue;
+  uint64_t number_of_messages= 0x1FFFF;
+  bool sender_finished {};
+  bool run {};
+  constexpr size_t number_of_senders = 16;
+  
+  auto reciver = std::async(std::launch::async,
+                           [&queue,number_of_messages,&sender_finished,&run]()
+                           {
+                            while(! lockfree::atomic_load(run, lockfree::memorder::relaxed) )
+                              lockfree::sleep(1);
+                            
+                           uint32_t last_message_nr{};
+                           uint64_t sum {};
+                           uint64_t const expected_sum { ((number_of_messages-1)*number_of_messages)/2 * number_of_senders };
+                           do
+                            {
+//                              BOOST_TEST_CHECKPOINT( "last_message_nr" << last_message_nr);
+                             if( !queue.empty() )
+                                {
+                                auto [ result, succeed ] = lockfree::queue_pull( queue );
+                                if( succeed )
+                                  {
+                                  BOOST_TEST( result.id < number_of_messages );
+                                  sum = sum + result.id;
+                                  BOOST_TEST( expected_sum >= sum );
+                                  ++last_message_nr;
+                                  }
+                                }
+                             else
+                               lockfree::sleep(1);
+                            }
+                            while( !sender_finished || !queue.empty() );
+                           BOOST_TEST( (number_of_messages * number_of_senders) == last_message_nr );
+                           BOOST_TEST( expected_sum == sum );
+                           });
+  
+//   lockfree::sleep(1);
+  auto fn_enqueue = [&queue,number_of_messages, &run]()
+                    {
+                    while(! lockfree::atomic_load(run, lockfree::memorder::relaxed) )
+                      lockfree::sleep(1);
+                    
+                    for( uint32_t i{}; i != number_of_messages; )
+                      {
+                      if( queue.size() <1000)
+                        {
+                        queue.push( message_t { i } );  
+                        ++i;
+                        }
+                      else
+                        lockfree::sleep(1);
+                      }
+                    };
+  
+  std::vector<std::future<void>> senders( number_of_senders );
+  for( auto & sender : senders )
+    sender = std::async(std::launch::async, fn_enqueue );
+  
+  lockfree::atomic_add_fetch( &run, true, lockfree::memorder::relaxed );
+  printf("flags set\n");
+  
+  for( auto & sender : senders )
+    sender.get();
+  
+  lockfree::atomic_add_fetch(&sender_finished,true, lockfree::memorder::relaxed );
+  reciver.get();
+}
 
 using fifo_type = lockfree::fifo_queue_t<message_t>;
 BOOST_AUTO_TEST_CASE( lock_free_fifo_test_single )
@@ -291,8 +435,8 @@ BOOST_AUTO_TEST_CASE( lock_free_fifo_test_2threads )
 BOOST_AUTO_TEST_CASE( lock_free_fifo_test_3threads_2recv_1send, * boost::unit_test::timeout(60) )
 {
   fifo_type queue;
-  uint32_t number_of_messages= 0x1FFFFF;
-  uint32_t number_of_messages2= 0x1AFFFF;
+  uint32_t number_of_messages= 0xFFFFF;
+  uint32_t number_of_messages2= 0xAFFFF;
   
   bool run {};
   auto recv = [&queue, &run]( uint32_t number_of_messages_loc )

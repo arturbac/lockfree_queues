@@ -270,8 +270,8 @@ namespace lockfree
     bool           finish_wating_;
     
   public:
-    inline bool        empty() const noexcept                  { assert(size_ >= 0); return atomic_load( size_, memorder::relaxed ) <= 0; }
-    inline size_type   size() const noexcept                   { return atomic_load( size_, memorder::relaxed ); }
+    inline bool        empty() const noexcept                  { return atomic_load( head_, memorder::seq_cst ) == nullptr; }
+    inline size_type   size() const noexcept                   { return atomic_load( size_, memorder::seq_cst ); }
     inline bool        finish_waiting() const noexcept         { return finish_wating_; }
     inline void        finish_waiting( bool value ) noexcept   { finish_wating_ = value ; }
     
@@ -382,9 +382,14 @@ namespace lockfree
       {
       result.reset( this->pull() );
       if(result)
+        {
         result->value = std::forward<user_obj_type &&>(user_data);
+        using pointer = node_type *;
+        result->next = pointer{};
+        }
       }
-    else
+      
+    if( ! result )
       result = std::make_unique<node_type>(std::forward<user_obj_type &&>(user_data));
     return result;
     }
@@ -532,12 +537,12 @@ namespace lockfree
     
   private:
     pointer_type   head_;
-    int32_t        size_;
+    size_type      size_;
     bool           finish_wating_;
     
   public:
-    inline bool        empty() const noexcept                  { assert(size_ >= 0); return atomic_load( size_, memorder::relaxed ) <= 0; }
-    inline size_type   size() const noexcept                   { return atomic_load( size_, memorder::relaxed ); }
+    inline bool        empty() const noexcept                  { return atomic_load( head_, memorder::seq_cst ) == nullptr; }
+    inline size_type   size() const noexcept                   { return atomic_load( size_, memorder::seq_cst ); }
     inline bool        finish_waiting() const noexcept         { return finish_wating_; }
     inline void        finish_waiting( bool value ) noexcept   { finish_wating_ = value ; }
     
@@ -579,7 +584,7 @@ namespace lockfree
         node_submitted = atomic_compare_exchange( &head_, last_head, next_node );
         }
       while(!node_submitted);
-      atomic_add_fetch(&size_, 1, memorder::relaxed );
+      atomic_add_fetch(&size_, size_type{1}, memorder::relaxed );
       }
     }
     
@@ -595,10 +600,10 @@ namespace lockfree
       bool deque_is_done = atomic_compare_exchange( &head_, head_to_dequeue, pointer_type{} );//if swap succeeds new head is estabilished
       if( deque_is_done )
         {
-        int32_t size_do_sub { 1 };
+        size_type size_to_sub {1};
         for( auto node{head_to_dequeue->next}; node != nullptr; node = node->next)
-           ++size_do_sub; 
-        atomic_sub_fetch(&size_, size_do_sub, memorder::relaxed );
+           ++size_to_sub; 
+        atomic_sub_fetch(&size_, size_to_sub, memorder::relaxed );
         break;
         }
       }
@@ -764,7 +769,7 @@ namespace lockfree
     reuse_node_queue_type free_node_to_reuse_;
     pointer_type    m_head;
     pointer_type    m_tail;
-    int32_t         m_size;
+    size_type       m_size;
     bool            m_finish_wating;
   public:
     bool        empty() const { return m_size == 0; }
@@ -843,7 +848,7 @@ namespace lockfree
       }
     cas( m_tail, tail_local, {node.get(), tail_local.count() + 1} );// Enqueue is done.  Try to swing Tail to the inserted node
     node.release();
-    atomic_add_fetch( &m_size, 1, memorder::relaxed );
+    atomic_add_fetch( &m_size, size_type{1}, memorder::relaxed );
     }
 
   template<typename T>
@@ -888,7 +893,7 @@ namespace lockfree
     // It is safe now to free the old node //heap-use-after-free
     free_node_to_reuse_.reuse_node( std::move(next_todel) );   
     head.set_ptr(nullptr);
-    atomic_sub_fetch( &m_size, 1, memorder::relaxed );
+    atomic_sub_fetch( &m_size, size_type{1}, memorder::relaxed );
     return pvalue;   // Queue was not empty, dequeue succeeded
     }
 
