@@ -28,7 +28,7 @@ static std::ostream & operator <<( std::ostream & stream, message_t sc )
   return stream;
   }
   
-BOOST_AUTO_TEST_CASE( lock_free_apop_test_single )
+BOOST_AUTO_TEST_CASE( lock_free_afifo_test_single )
 {
   afifo_queue_type queue;
   auto [it, succeed] { lockfree::queue_pull( queue ) };
@@ -62,6 +62,69 @@ BOOST_AUTO_TEST_CASE( lock_free_apop_test_single )
     BOOST_TEST( succeed );
     BOOST_TEST( result == (message_t{i}) );
     }
+}
+
+BOOST_AUTO_TEST_CASE( lock_free_afifo_test_2threads )
+{
+  afifo_queue_type queue;
+  uint64_t number_of_messages= 0x1FFFF;
+  bool sender_finished {};
+  
+  auto reciver = std::async(std::launch::async,
+                           [&queue,number_of_messages,&sender_finished]()
+                           {
+                           uint32_t last_message_nr{};
+                           uint64_t sum {};
+                           uint64_t const expected_sum { ((number_of_messages-1)*number_of_messages)/2};
+                           do
+                            {
+                             if( !queue.empty() )
+                                {
+                                auto [ it, succeed ] = lockfree::queue_pull( queue );
+                                if( succeed )
+                                  {
+                                  for(;!it.empty();)
+                                    {
+                                    auto [ result, succeed2 ] = lockfree::queue_pull( it );
+                                    BOOST_TEST( succeed2 );
+                                    BOOST_TEST( result.id  == last_message_nr );
+                                    sum = sum + result.id;
+                                    BOOST_TEST( expected_sum >= sum );
+                                    ++last_message_nr;
+                                    }
+                                  }
+                                }
+                             else
+                               lockfree::sleep(1);
+                            }
+                            while( !sender_finished || !queue.empty() );
+                            
+                           BOOST_TEST( number_of_messages == last_message_nr );
+                           
+                           BOOST_TEST( expected_sum == sum );
+                           });
+  
+//   lockfree::sleep(1);
+  auto sender = std::async(std::launch::async,
+                           [&queue,number_of_messages,&sender_finished]()
+                            {
+                            for( uint32_t i{}; i != number_of_messages; )
+                              {
+                              if( queue.size() <1000)
+                                {
+                                queue.push( message_t { i } );  
+                                ++i;
+                                }
+                              else
+                                lockfree::sleep(1);
+                              }
+                            sender_finished = true;
+                            });
+  sender.get();
+  printf("sender finished\n");
+  reciver.get();
+  
+
 }
 
 using lifo_type = lockfree::lifo_queue_t<message_t>;
