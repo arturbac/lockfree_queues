@@ -11,13 +11,13 @@ namespace ampi
 {
   inline void sleep( uint32_t ms ) { usleep(ms*1000); }
   
-  enum struct memorder : int { relaxed = __ATOMIC_RELAXED, acquire = __ATOMIC_ACQUIRE,  release = __ATOMIC_RELEASE, seq_cst = __ATOMIC_SEQ_CST };
+  enum struct memorder : int { relaxed = __ATOMIC_RELAXED, acquire = __ATOMIC_ACQUIRE,  release = __ATOMIC_RELEASE, acq_rel = __ATOMIC_ACQ_REL };
   
 
   template<typename T, typename U>
 	inline bool atomic_compare_exchange( T * loc [[gnu::nonnull]], U comparand, U value,
-                                       memorder success = memorder::seq_cst,
-                                      memorder fail = memorder::seq_cst ) 
+                                       memorder success = memorder::acq_rel,
+                                      memorder fail = memorder::relaxed ) 
     { return __atomic_compare_exchange_n( loc, &comparand, value, true, static_cast<int32_t>(success), static_cast<int32_t>(fail)); }
     
   template<typename type>

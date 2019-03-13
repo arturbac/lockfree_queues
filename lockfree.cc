@@ -13,13 +13,13 @@ struct message_t
   uint32_t id;
   
   message_t() noexcept : id{} 
-    { ampi::atomic_add_fetch(&instance_counter, int64_t(1), ampi::memorder::relaxed ); }
+    { ampi::atomic_add_fetch(&instance_counter, int64_t(1), ampi::memorder::acq_rel ); }
     
   message_t(uint32_t pid ) noexcept : id{ pid }
-    { ampi::atomic_add_fetch(&instance_counter, int64_t(1), ampi::memorder::relaxed ); }
+    { ampi::atomic_add_fetch(&instance_counter, int64_t(1), ampi::memorder::acq_rel ); }
 
   message_t( message_t const & rh ) noexcept : id{ rh.id } 
-    { ampi::atomic_add_fetch(&instance_counter, int64_t(1), ampi::memorder::relaxed ); }
+    { ampi::atomic_add_fetch(&instance_counter, int64_t(1), ampi::memorder::acq_rel ); }
 
   message_t & operator =( message_t const & rh ) noexcept
     {
@@ -218,12 +218,12 @@ message_t::instance_counter  = 0;
   for( auto & sender : senders )
     sender = std::async(std::launch::async, fn_enqueue );
   
-  ampi::atomic_add_fetch( &run, true, ampi::memorder::seq_cst );
+  ampi::atomic_add_fetch( &run, true, ampi::memorder::acq_rel );
   printf("flags set\n");
 
   for( auto & sender : senders )
     sender.get();
-  ampi::atomic_add_fetch(&sender_finished,true, ampi::memorder::seq_cst );
+  ampi::atomic_add_fetch(&sender_finished,true, ampi::memorder::acq_rel );
   printf("sender finished\n");
   reciver.get();
   }
@@ -400,13 +400,14 @@ message_t::instance_counter  = 0;
   for( auto & sender : senders )
     sender = std::async(std::launch::async, fn_enqueue );
   
-  ampi::atomic_add_fetch( &run, true, ampi::memorder::seq_cst );
-  printf("flags set\n");
+  ampi::atomic_add_fetch( &run, true, ampi::memorder::acq_rel );
+//   printf("flags set\n");
   
   for( auto & sender : senders )
     sender.get();
-  printf("Senders send all data\n");
-  ampi::atomic_add_fetch(&sender_finished,true, ampi::memorder::seq_cst );
+//   printf("Senders send all data\n");
+  ampi::sleep(10);
+  ampi::atomic_add_fetch(&sender_finished,true, ampi::memorder::acq_rel );
   reciver.get();
   BOOST_TEST( queue.empty() );
   BOOST_TEST( queue.size() == 0 );
@@ -534,12 +535,13 @@ message_t::instance_counter  = 0;
                            catch(...){}
                             }, number_of_messages + number_of_messages2 );
 
-  ampi::atomic_add_fetch( &run, true, ampi::memorder::seq_cst );
-  printf("flags set\n");
+  ampi::atomic_add_fetch( &run, true, ampi::memorder::acq_rel );
+//   printf("flags set\n");
   sender.get();
-  printf("sender finished\n");
+  ampi::sleep(10);
+//   printf("sender finished\n");
   uint32_t sum = reciver.get() + reciver2.get();
-  printf("recivers finished\n");
+//   printf("recivers finished\n");
   BOOST_TEST( sum == (number_of_messages+number_of_messages2) );
   BOOST_TEST( queue.empty() );
   BOOST_TEST( queue.size() == 0 );
