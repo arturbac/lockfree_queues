@@ -634,13 +634,13 @@ namespace ampi
     
   private:
     reuse_node_queue_type free_node_to_reuse_;
-    pointer_type    m_head;
-    pointer_type    m_tail;
-    size_type       m_size;
+    pointer_type    head_;
+    pointer_type    tail_;
+    size_type       size_;
     bool            m_finish_wating;
   public:
-    bool        empty() const                   { return m_size == 0; }
-    size_type   size() const                    { assert(m_size>=0); return m_size; }
+    bool        empty() const                   { return atomic_load( &size_, memorder::acquire ) == 0; }
+    size_type   size() const                    { return atomic_load( &size_, memorder::acquire ); }
     bool        finish_waiting() const          { return m_finish_wating; }
     void        finish_waiting( bool value )    { m_finish_wating = value ; }
   public:
@@ -658,16 +658,16 @@ namespace ampi
 
   template<typename USER_OBJ_TYPE>
   fifo_queue_internal_tmpl<USER_OBJ_TYPE>::fifo_queue_internal_tmpl()
-    : m_head()
-    , m_tail()
-    , m_size()
+    : head_()
+    , tail_()
+    , size_()
     , m_finish_wating()
   {
     node_type * node = new node_type(); // Allocate a free node
                       // Make it the only node in the linked list
-    m_head.set_ptr( node );
-    m_tail.set_ptr( node );        // Both Head and Tail point to it
-    static_assert( sizeof(pointer_type) == 8, "64bit only supported" );
+    head_.set_ptr( node );
+    tail_.set_ptr( node );        // Both Head and Tail point to it
+    static_assert( sizeof(pointer_type) == 8, "64bit only supported TODO 32bit" );
   }
   
   template<typename T>
@@ -680,7 +680,7 @@ namespace ampi
 
       user_obj_type * any_data;
       while ((any_data = pull()) != nullptr);
-      delete m_head.get();
+      delete head_.get();
       }
     catch(...)
       {}
@@ -696,11 +696,11 @@ namespace ampi
                                                                     // Set next pointer of node to NULL
     for(;;)                                                     // Keep trying until Enqueue is done
       {
-      tail_local = atomic_load( m_tail, memorder::acquire );        // Read Tail.ptr and Tail.count together
+      tail_local = atomic_load( tail_, memorder::acquire );        // Read Tail.ptr and Tail.count together
       node_type* node_1 = tail_local.get();
       next = atomic_load(node_1->next_cas, memorder::acquire);      // Read next ptr and count fields together
 
-      if ( tail_local == atomic_load( m_tail, memorder::acquire ) ) // Are tail_local and next consistent?
+      if ( tail_local == atomic_load( tail_, memorder::acquire ) ) // Are tail_local and next consistent?
         {
         if (next.get() == nullptr)                                  // Was Tail pointing to the last node?
           {
@@ -709,13 +709,13 @@ namespace ampi
           }
         else         // Tail was not pointing to the last node
           {
-          cas( m_tail, tail_local, pointer_type{ next.get(), tail_local.count() + 1 } );// Try to swing Tail to the next node
+          cas( tail_, tail_local, pointer_type{ next.get(), tail_local.count() + 1 } );// Try to swing Tail to the next node
           }
         }
       }
-    cas( m_tail, tail_local, {node.get(), tail_local.count() + 1} );// Enqueue is done.  Try to swing Tail to the inserted node
+    cas( tail_, tail_local, {node.get(), tail_local.count() + 1} );// Enqueue is done.  Try to swing Tail to the inserted node
     node.release();
-    atomic_add_fetch( &m_size, size_type{1}, memorder::release );
+    atomic_add_fetch( &size_, size_type{1}, memorder::release );
     }
 
   template<typename T>
@@ -727,16 +727,16 @@ namespace ampi
 
     for (;;)                                  // Keep trying until Dequeue is done
       {
-      head = atomic_load(m_head, memorder::acquire);    // Read Head
-      pointer_type tail = atomic_load(m_tail, memorder::acquire);    // Read Tail
+      head = atomic_load(head_, memorder::acquire);    // Read Head
+      pointer_type tail = atomic_load(tail_, memorder::acquire);    // Read Tail
       pointer_type next = atomic_load(head.get()->next_cas, memorder::acquire);                           // Read Head.ptr->next //heap-use-after-free
-      if( head == m_head )                             // Are head, tail, and next consistent?
+      if( head == head_ )                             // Are head, tail, and next consistent?
         {
         if( head.get() == tail.get() )                     // Is queue empty or Tail falling behind?
           {
           if ( next.get() == nullptr)                       // Is queue empty?
             return nullptr;  
-          cas( m_tail, tail, pointer_type{next.get(), tail.count() + 1} );        // Tail is falling behind.  Try to advance it
+          cas( tail_, tail, pointer_type{next.get(), tail.count() + 1} );        // Tail is falling behind.  Try to advance it
           }
         else
           {
@@ -747,7 +747,7 @@ namespace ampi
             {
             pvalue = node_d->value;
             // Try to swing Head to the next node
-            if ( cas( m_head, head, pointer_type{next.get(), head.count() + 1}))      // Try to swing Head to the next node
+            if ( cas( head_, head, pointer_type{next.get(), head.count() + 1}))      // Try to swing Head to the next node
               break;
             pvalue = nullptr;
             }
@@ -760,7 +760,7 @@ namespace ampi
     // It is safe now to free the old node //heap-use-after-free
     free_node_to_reuse_.reuse_node( std::move(next_todel) );   
     head.set_ptr(nullptr);
-    atomic_sub_fetch( &m_size, size_type{1}, memorder::release );
+    atomic_sub_fetch( &size_, size_type{1}, memorder::release );
     return pvalue;   // Queue was not empty, dequeue succeeded
     }
 
