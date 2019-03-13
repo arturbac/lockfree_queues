@@ -1,4 +1,4 @@
-#include "lockfree_native.h"
+#include <ampi/ampi.h>
 #include <algorithm>
 #include <numeric>
 #include <future>
@@ -26,7 +26,7 @@ struct message_t
   
 int main()
 {
-  using fifo_type = lockfree::fifo_queue_t<message_t>;
+  using fifo_type = ampi::fifo_queue_t<message_t>;
   
   fifo_type queue;
   uint32_t number_of_messages= 0x1FFFFF;
@@ -35,13 +35,13 @@ int main()
   bool run {};
   auto recv = [&queue, &run]( uint32_t number_of_messages_loc )
                            {
-                           while(! lockfree::atomic_load(run, lockfree::memorder::relaxed) )
-                             lockfree::sleep(1);
+                           while(! ampi::atomic_load( &run, ampi::memorder::relaxed) )
+                             ampi::sleep(1);
                            
                            uint32_t recived_count{};
                            try {
                            do{
-                              auto [result, succeed] = lockfree::queue_pull( queue );
+                              auto [result, succeed] = ampi::pull( queue );
                               if( succeed )
                                 ++recived_count;
                             } while( recived_count != number_of_messages_loc );
@@ -56,22 +56,22 @@ int main()
   auto sender = std::async(std::launch::async,
                            [&queue, &run]( uint32_t number_of_messages_loc )
                             {
-                            while(! lockfree::atomic_load(run, lockfree::memorder::relaxed) )
-                              lockfree::sleep(1);
+                            while(! ampi::atomic_load( &run, ampi::memorder::relaxed) )
+                              ampi::sleep(1);
                             try {
                             for( uint32_t i{}; i != number_of_messages_loc;  )
                               if( queue.size() <1000)
                                 {
-                                queue.push( message_t { i } );  
+                                ampi::push( queue, message_t { i } );  
                                 ++i;
                                 }
                               else
-                                lockfree::sleep(1);
+                                ampi::sleep(1);
                             }
                            catch(...){}
                             }, number_of_messages + number_of_messages2 );
   auto tmbeg{ clock_type::now() };
-  lockfree::atomic_add_fetch( &run, true, lockfree::memorder::relaxed );
+  ampi::atomic_add_fetch( &run, true, ampi::memorder::relaxed );
 //   printf("flags set\n");
   sender.get();
 //   printf("sender finished\n");

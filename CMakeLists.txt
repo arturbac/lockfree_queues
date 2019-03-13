@@ -143,7 +143,7 @@ endif()
 # unit tests 
 add_executable(lockfree_ut)
 target_sources(lockfree_ut PRIVATE lockfree.cc )
-
+target_include_directories( lockfree_ut PRIVATE include )
 target_link_libraries( lockfree_ut
 PRIVATE
   Boost::unit_test_framework
@@ -157,8 +157,10 @@ PRIVATE
   )
 #--------------------------------------------------------------------------------------
 
+
 add_executable( lockfree_fifo_wild )
 target_sources( lockfree_fifo_wild PRIVATE lockfree_fifo_wild.cc )
+target_include_directories( lockfree_fifo_wild PRIVATE include )
 target_link_libraries( lockfree_fifo_wild
 PRIVATE
   Boost::unit_test_framework

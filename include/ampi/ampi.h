@@ -68,145 +68,10 @@
 // the code can be augmented easily to use hazard pointers or epoch- or interval-based reclamation.
 // 
 // - mls
-#pragma once
+#include "common_utils.h"
 
-#include <cassert>
-#include <cstdint>
-#include <cstdlib>
-#include <memory>
-#include <unistd.h>
-
-namespace lockfree
+namespace ampi
 {
-  inline void sleep( uint32_t ms ) { usleep(ms*1000); }
-  
-  enum struct memorder : int { relaxed = __ATOMIC_RELAXED, seq_cst = __ATOMIC_SEQ_CST };
-  
-
-  template<typename T, typename U>
-	inline bool atomic_compare_exchange( T * loc [[gnu::nonnull]], U comparand, U value,
-                                       memorder success = memorder::seq_cst,
-                                      memorder fail = memorder::seq_cst ) 
-    { return __atomic_compare_exchange_n( loc, &comparand, value, false, static_cast<int32_t>(success), static_cast<int32_t>(fail)); }
-    
-  template<typename type>
-  inline type atomic_load( type & ref, memorder order) noexcept
-    {
-    return type{ __atomic_load_n( &ref, static_cast<int>(order) ) };
-    }
-    
-  
-  template<typename type>
-  inline type atomic_add_fetch(type * ptr, type value, memorder order ) noexcept
-    { return __atomic_add_fetch ( ptr, value, static_cast<int>(order)); }
-    
-  template<typename type>
-  inline type atomic_sub_fetch(type * ptr, type value, memorder order ) noexcept
-    { return __atomic_sub_fetch ( ptr, value, static_cast<int>(order)); } 
-    
-  //----------------------------------------------------------------------------------------------------------------------
-  //
-  // pointer_t
-  //
-  //----------------------------------------------------------------------------------------------------------------------
-  template<typename NODE_TYPE>
-  union pointer_t
-  {
-  public:
-    typedef NODE_TYPE        node_type;
-    typedef pointer_t<node_type>  class_type;
-
-    template<typename NODE_T>
-    friend bool cas( pointer_t<NODE_T> & dest, pointer_t<NODE_T>  const & compare, pointer_t<NODE_T> const & swap );
-  public:
-
-    struct data_t 
-      {
-      uint64_t ptr_value    : 48;
-      uint64_t count        : 16;
-      } data;
-    int64_t cas_value;
-
-  public:
-    pointer_t();
-    pointer_t( node_type * n, unsigned c = 0 );
-    pointer_t( pointer_t const & other );
-    explicit pointer_t( int64_t value ) noexcept { cas_value = value; }
-  public:
-    inline bool operator ==( class_type const & other ) const;
-    inline class_type & operator =( class_type const & other );
-
-  public:
-    unsigned count() const { return this->data.count; }
-    node_type * get() const noexcept { return reinterpret_cast<node_type*>( this->data.ptr_value ); }
-    node_type * operator->() const noexcept { return get(); }
-    explicit operator bool() const noexcept { return get() != nullptr; }
-    void set_ptr( node_type * value );
-    };
-
-
-  template<typename NODE_TYPE>
-  inline bool cas( pointer_t<NODE_TYPE> & dest, pointer_t<NODE_TYPE> const & compare
-    , typename pointer_t<NODE_TYPE>::node_type * node, unsigned counter )
-    {
-    pointer_t<NODE_TYPE> tmp_value( node, counter );
-    return  cas( dest, compare, tmp_value );
-    }
-
-
-  template<typename NODE_TYPE>
-  inline bool cas( pointer_t<NODE_TYPE> & dest, pointer_t<NODE_TYPE> const & compare
-    , pointer_t<NODE_TYPE> const & swap )
-    {
-    bool result = atomic_compare_exchange( &dest.cas_value, compare.cas_value, swap.cas_value);
-    return result;
-    }
-
-  template<typename node_type>
-  inline pointer_t<node_type> atomic_load( pointer_t<node_type> & ptr, memorder order) noexcept
-    {
-    return pointer_t<node_type>{ __atomic_load_n( &ptr.cas_value, static_cast<int>(order) ) };  
-    }
-    
-  template<typename NODE_TYPE>
-  inline pointer_t<NODE_TYPE>::pointer_t()
-      : cas_value( 0 )
-    {}
-
-  template<typename NODE_TYPE>
-  inline pointer_t<NODE_TYPE>::pointer_t( node_type * n, unsigned c )
-      : cas_value( 0 )
-    {
-    this->set_ptr( n );
-    this->data.count = static_cast<uint64_t>( c % 0xFFFF );
-    }
-    
-  template<typename NODE_TYPE>
-  inline pointer_t<NODE_TYPE>::pointer_t( pointer_t const & other )
-      : cas_value( other.cas_value )
-    {}
-  
-  template<typename NODE_TYPE>
-  inline bool pointer_t<NODE_TYPE>::operator ==( class_type const & other ) const
-    {
-    bool result( this->cas_value == other.cas_value );
-    return result;
-    }
-
-  template<typename NODE_TYPE>
-  inline typename pointer_t<NODE_TYPE>::class_type &
-  pointer_t<NODE_TYPE>::operator =( class_type const & other )
-    {
-    this->cas_value = other.cas_value;
-    return *this;
-    }
-
-  template<typename NODE_TYPE>
-  inline void pointer_t<NODE_TYPE>::set_ptr( node_type * value )
-    {
-    assert( (intptr_t(value) & 0xFFFF000000000000llu) == 0 );
-    data.ptr_value = reinterpret_cast<intptr_t>(value) & 0xFFFFFFFFFFFFllu;
-    }
 
   //----------------------------------------------------------------------------------------------------------------------
   //
@@ -270,8 +135,8 @@ namespace lockfree
     bool           finish_wating_;
     
   public:
-    inline bool        empty() const noexcept                  { return atomic_load( head_, memorder::seq_cst ) == nullptr; }
-    inline size_type   size() const noexcept                   { return atomic_load( size_, memorder::seq_cst ); }
+    inline bool        empty() const noexcept                  { return atomic_load( &head_, memorder::acquire ) == nullptr; }
+    inline size_type   size() const noexcept                   { return atomic_load( &size_, memorder::acquire ); }
     inline bool        finish_waiting() const noexcept         { return finish_wating_; }
     inline void        finish_waiting( bool value ) noexcept   { finish_wating_ = value ; }
     
@@ -283,7 +148,7 @@ namespace lockfree
     
   public:
     ///\brief enqueues supplyied node
-    void push( node_type * user_data [[gnu::nonnull]] );
+    void push( node_type * user_data /*[[gnu::nonnull]]*/ );
     
     ///\brief single try to dequeue element
     ///\description @{
@@ -299,20 +164,21 @@ namespace lockfree
 
   
   template<typename T>
-  void lifo_queue_internal_tmpl<T>::push( node_type * next_node [[gnu::nonnull]] )
+  void lifo_queue_internal_tmpl<T>::push( node_type * next_node /*[[gnu::nonnull]]*/ )
     {
+    assert(next_node != nullptr );
     if( !finish_waiting() )
       {
       //atomic linked list
       bool node_submitted {};
       do
         {
-        pointer_type last_head { atomic_load( head_, memorder::relaxed ) };
+        pointer_type last_head { atomic_load( &head_, memorder::acquire ) };
         next_node->next = last_head;
         node_submitted = atomic_compare_exchange( &head_, last_head, next_node );
         }
       while(!node_submitted);
-      atomic_add_fetch(&size_, 1, memorder::relaxed );
+      atomic_add_fetch(&size_, 1, memorder::release );
       }
     }
 
@@ -320,16 +186,17 @@ namespace lockfree
   typename lifo_queue_internal_tmpl<T>::node_type * 
   lifo_queue_internal_tmpl<T>::pull()
     {
-    pointer_type head_to_dequeue{atomic_load(head_, memorder::relaxed)};
+    pointer_type head_to_dequeue{atomic_load( &head_, memorder::acquire)};
 
     for (;nullptr != head_to_dequeue; //return when nothing left in queue
-            head_to_dequeue = atomic_load(head_, memorder::relaxed))                                                 // Keep trying until Dequeue is done
+            head_to_dequeue = atomic_load( &head_, memorder::acquire))                                                 // Keep trying until Dequeue is done
       {
       pointer_type next { head_to_dequeue->next };                             //load next head value
       bool deque_is_done = atomic_compare_exchange( &head_, head_to_dequeue, next );//if swap succeeds new head is estabilished
       if( deque_is_done )
         {
-        atomic_sub_fetch(&size_, 1, memorder::relaxed );
+        assert(head_to_dequeue != nullptr);
+        atomic_sub_fetch(&size_, 1, memorder::release );
         head_to_dequeue->next = pointer_type{};
         break;
         }
@@ -347,7 +214,7 @@ namespace lockfree
       if ( res != nullptr || finish_wating_ )
         return res;
 
-      lockfree::sleep( static_cast< uint32_t>( sleep_millisec ));
+      ampi::sleep( static_cast< uint32_t>( sleep_millisec ));
       }
     }
   //----------------------------------------------------------------------------------------------------------------------
@@ -541,8 +408,8 @@ namespace lockfree
     bool           finish_wating_;
     
   public:
-    inline bool        empty() const noexcept                  { return atomic_load( head_, memorder::seq_cst ) == nullptr; }
-    inline size_type   size() const noexcept                   { return atomic_load( size_, memorder::seq_cst ); }
+    inline bool        empty() const noexcept                  { return atomic_load( &head_, memorder::acquire ) == nullptr; }
+    inline size_type   size() const noexcept                   { return atomic_load( &size_, memorder::acquire ); }
     inline bool        finish_waiting() const noexcept         { return finish_wating_; }
     inline void        finish_waiting( bool value ) noexcept   { finish_wating_ = value ; }
     
@@ -579,12 +446,12 @@ namespace lockfree
       bool node_submitted {};
       do
         {
-        pointer_type last_head { atomic_load( head_, memorder::relaxed ) };
+        pointer_type last_head { atomic_load( &head_, memorder::acquire ) };
         next_node->next = last_head;
         node_submitted = atomic_compare_exchange( &head_, last_head, next_node );
         }
       while(!node_submitted);
-      atomic_add_fetch(&size_, size_type{1}, memorder::relaxed );
+      atomic_add_fetch(&size_, size_type{1}, memorder::release );
       }
     }
     
@@ -592,10 +459,10 @@ namespace lockfree
   typename afifo_queue_internal_tmpl<T>::node_type * 
   afifo_queue_internal_tmpl<T>::pull()
     {
-    pointer_type head_to_dequeue{atomic_load(head_, memorder::relaxed)};
+    pointer_type head_to_dequeue{atomic_load( &head_, memorder::acquire)};
 
     for (;nullptr != head_to_dequeue; //return when nothing left in queue
-            head_to_dequeue = atomic_load(head_, memorder::relaxed))                                                 // Keep trying until Dequeue is done
+            head_to_dequeue = atomic_load( &head_, memorder::acquire))                                                 // Keep trying until Dequeue is done
       {
       bool deque_is_done = atomic_compare_exchange( &head_, head_to_dequeue, pointer_type{} );//if swap succeeds new head is estabilished
       if( deque_is_done )
@@ -603,7 +470,7 @@ namespace lockfree
         size_type size_to_sub {1};
         for( auto node{head_to_dequeue->next}; node != nullptr; node = node->next)
            ++size_to_sub; 
-        atomic_sub_fetch(&size_, size_to_sub, memorder::relaxed );
+        atomic_sub_fetch(&size_, size_to_sub, memorder::release );
         break;
         }
       }
@@ -772,10 +639,10 @@ namespace lockfree
     size_type       m_size;
     bool            m_finish_wating;
   public:
-    bool        empty() const { return m_size == 0; }
-    size_type   size() const { assert(m_size>=0); return m_size; }
-    bool        finish_waiting() const { return m_finish_wating; }
-    void        finish_waiting( bool value ) { m_finish_wating = value ; }
+    bool        empty() const                   { return m_size == 0; }
+    size_type   size() const                    { assert(m_size>=0); return m_size; }
+    bool        finish_waiting() const          { return m_finish_wating; }
+    void        finish_waiting( bool value )    { m_finish_wating = value ; }
   public:
     fifo_queue_internal_tmpl();
     ~fifo_queue_internal_tmpl();
@@ -908,7 +775,7 @@ namespace lockfree
       if ( res != nullptr || m_finish_wating )
         return res;
 
-      lockfree::sleep( static_cast< uint32_t>( sleep_tm ));
+      ampi::sleep( static_cast< uint32_t>( sleep_tm ));
       }
     }
 
@@ -968,15 +835,21 @@ namespace lockfree
       return {};
       }
     };
-
+    
+  //----------------------------------------------------------------------------------------------------------------------
+  //
+  // common functional access methods
+  //
+  //----------------------------------------------------------------------------------------------------------------------
+    
   template<typename queue_type, typename user_obj_type>
-  void queue_push( queue_type & queue, user_obj_type && user_data ) 
+  void push( queue_type & queue, user_obj_type && user_data ) 
     {
     queue.push( std::forward<user_obj_type &&>(user_data) ) ;
     }
    
   template<typename queue_type>
-  inline auto queue_pull( queue_type & queue )
+  inline auto pull( queue_type & queue )
     {
     return queue.pull();
     }
