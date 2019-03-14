@@ -1,5 +1,4 @@
 #pragma once
-#pragma once
 
 #include <cassert>
 #include <cstdint>
@@ -18,7 +17,7 @@ namespace ampi
 	inline bool atomic_compare_exchange( T * loc [[gnu::nonnull]], U comparand, U value,
                                        memorder success = memorder::acq_rel,
                                       memorder fail = memorder::relaxed ) 
-    { return __atomic_compare_exchange_n( loc, &comparand, value, true, static_cast<int32_t>(success), static_cast<int32_t>(fail)); }
+    { return __atomic_compare_exchange_n( loc, &comparand, value, false, static_cast<int32_t>(success), static_cast<int32_t>(fail)); }
     
   template<typename type>
   inline type atomic_load( type * ref, memorder order) noexcept

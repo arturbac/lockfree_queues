@@ -1,3 +1,5 @@
+#pragma once
+
 // MIT License
 // 
 // Copyright (c) [year] [fullname]
@@ -175,7 +177,7 @@ namespace ampi
         {
         pointer_type last_head { atomic_load( &head_, memorder::acquire ) };
         next_node->next = last_head;
-        node_submitted = atomic_compare_exchange( &head_, last_head, next_node );
+        node_submitted = atomic_compare_exchange( &head_, last_head, next_node, memorder::acq_rel, memorder::acquire );
         }
       while(!node_submitted);
       atomic_add_fetch(&size_, 1, memorder::release );
@@ -192,7 +194,7 @@ namespace ampi
             head_to_dequeue = atomic_load( &head_, memorder::acquire))                                                 // Keep trying until Dequeue is done
       {
       pointer_type next { head_to_dequeue->next };                             //load next head value
-      bool deque_is_done = atomic_compare_exchange( &head_, head_to_dequeue, next );//if swap succeeds new head is estabilished
+      bool deque_is_done = atomic_compare_exchange( &head_, head_to_dequeue, next, memorder::acq_rel, memorder::acquire );//if swap succeeds new head is estabilished
       if( deque_is_done )
         {
         assert(head_to_dequeue != nullptr);
@@ -273,6 +275,8 @@ namespace ampi
   template<typename T>
   void reuse_node_queue_t<T>::reuse_node( std::unique_ptr<node_type> && to_reuse )
     {
+    using pointer = node_type *;
+    to_reuse->next = pointer{};
     this->push( to_reuse.get() );
     to_reuse.release();
     }

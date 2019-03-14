@@ -305,7 +305,7 @@ message_t::instance_counter  = 0;
                              else
                                ampi::sleep(1);
                             }
-                            while( !sender_finished || !queue.empty() );
+                            while( !ampi::atomic_load( &sender_finished, ampi::memorder::acquire) || !queue.empty() );
                             
                            BOOST_TEST( number_of_messages == last_message_nr );
                            
@@ -372,7 +372,7 @@ message_t::instance_counter  = 0;
                              else
                                ampi::sleep(1);
                             }
-                            while( !ampi::atomic_load( &sender_finished, ampi::memorder::relaxed) || !queue.empty() );
+                            while( !ampi::atomic_load( &sender_finished, ampi::memorder::acquire) || !queue.empty() );
                             
                            BOOST_TEST( (number_of_messages * number_of_senders) == last_message_nr );
                            BOOST_TEST( expected_sum == sum );
