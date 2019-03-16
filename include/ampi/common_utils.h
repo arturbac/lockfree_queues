@@ -1,3 +1,27 @@
+// MIT License
+// 
+// Copyright (c) 2019 Artur Bac
+// 
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+// 
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+// 
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
+// Non-Blocking Concurrent Queue Algorithms, lock free
+
 #pragma once
 
 #include <cassert>
@@ -5,6 +29,7 @@
 #include <cstdlib>
 #include <memory>
 #include <unistd.h>
+#include <atomic>
 
 namespace ampi
 {
@@ -15,7 +40,7 @@ namespace ampi
 
   template<typename T, typename U>
 	inline bool atomic_compare_exchange( T * loc [[gnu::nonnull]], U comparand, U value,
-                                       memorder success = memorder::acq_rel,
+                                       memorder success = memorder::release,
                                       memorder fail = memorder::relaxed ) 
     { return __atomic_compare_exchange_n( loc, &comparand, value, false, static_cast<int32_t>(success), static_cast<int32_t>(fail)); }
     
@@ -59,13 +84,13 @@ namespace ampi
     int64_t cas_value;
 
   public:
-    pointer_t();
-    pointer_t( node_type * n, unsigned c = 0 );
-    pointer_t( pointer_t const & other );
+    pointer_t() noexcept ;
+    pointer_t( node_type * n, unsigned c = 0 ) noexcept ;
+    pointer_t( pointer_t const & other ) noexcept = default;
     explicit pointer_t( int64_t value ) noexcept { cas_value = value; }
   public:
     inline bool operator ==( class_type const & other ) const;
-    inline class_type & operator =( class_type const & other );
+    class_type & operator =( class_type const & other ) noexcept = default;
 
   public:
     unsigned count() const { return this->data.count; }
@@ -100,22 +125,22 @@ namespace ampi
     }
     
   template<typename NODE_TYPE>
-  inline pointer_t<NODE_TYPE>::pointer_t()
+  inline pointer_t<NODE_TYPE>::pointer_t() noexcept 
       : cas_value( 0 )
     {}
 
   template<typename NODE_TYPE>
-  inline pointer_t<NODE_TYPE>::pointer_t( node_type * n, unsigned c )
+  inline pointer_t<NODE_TYPE>::pointer_t( node_type * n, unsigned c ) noexcept 
       : cas_value( 0 )
     {
     this->set_ptr( n );
     this->data.count = static_cast<uint64_t>( c % 0xFFFF );
     }
     
-  template<typename NODE_TYPE>
-  inline pointer_t<NODE_TYPE>::pointer_t( pointer_t const & other )
-      : cas_value( other.cas_value )
-    {}
+//   template<typename NODE_TYPE>
+//   inline pointer_t<NODE_TYPE>::pointer_t( pointer_t const & other )
+//       : cas_value( other.cas_value )
+//     {}
   
   template<typename NODE_TYPE>
   inline bool pointer_t<NODE_TYPE>::operator ==( class_type const & other ) const
@@ -124,13 +149,13 @@ namespace ampi
     return result;
     }
 
-  template<typename NODE_TYPE>
-  inline typename pointer_t<NODE_TYPE>::class_type &
-  pointer_t<NODE_TYPE>::operator =( class_type const & other )
-    {
-    this->cas_value = other.cas_value;
-    return *this;
-    }
+//   template<typename NODE_TYPE>
+//   inline typename pointer_t<NODE_TYPE>::class_type &
+//   pointer_t<NODE_TYPE>::operator =( class_type const & other )
+//     {
+//     this->cas_value = other.cas_value;
+//     return *this;
+//     }
 
   template<typename NODE_TYPE>
   inline void pointer_t<NODE_TYPE>::set_ptr( node_type * value )
@@ -139,4 +164,29 @@ namespace ampi
     data.ptr_value = reinterpret_cast<intptr_t>(value) & 0xFFFFFFFFFFFFllu;
     }
 
+  //----------------------------------------------------------------------------------------------------------------------
+  //
+  // node_t
+  //
+  //----------------------------------------------------------------------------------------------------------------------
+  
+  template<typename USER_OBJ_TYPE>
+  struct lifo_node_t
+    {
+    typedef USER_OBJ_TYPE                user_obj_type;
+    typedef lifo_node_t<user_obj_type>   class_type;
+    typedef class_type *                 pointer_type;
+
+    user_obj_type     value;
+//     union {
+      pointer_type      next;
+//       pointer_t<class_type>  next_cas;
+//       };
+
+    lifo_node_t() : value(),  next() {}
+    lifo_node_t( user_obj_type && data ) : value( std::forward<user_obj_type &&>(data)), next() {}
+    };
+    
+  template<typename USER_OBJ_TYPE>
+  using node_t = lifo_node_t<USER_OBJ_TYPE>;
 }

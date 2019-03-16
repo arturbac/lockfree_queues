@@ -140,6 +140,10 @@ if( CXX_WEVERYTHING )
   check_cxx_accepts_flag_add_res("-Wno-unused-command-line-argument" CXXUNUSEDCOMMANDLINEARGUMENT)
 endif()
 #--------------------------------------------------------------------------------------
+# add_library( ampi UNKNOWN IMPORTED  )
+# set_target_properties( ampi PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${CMAKE_CURRENT_SOURCE_DIR}/include )
+
+#--------------------------------------------------------------------------------------
 # unit tests 
 add_executable(lockfree_ut)
 target_sources(lockfree_ut PRIVATE lockfree.cc )
@@ -157,20 +161,20 @@ PRIVATE
   )
 #--------------------------------------------------------------------------------------
 
-
-add_executable( lockfree_fifo_wild )
-target_sources( lockfree_fifo_wild PRIVATE lockfree_fifo_wild.cc )
-target_include_directories( lockfree_fifo_wild PRIVATE include )
-target_link_libraries( lockfree_fifo_wild
-PRIVATE
-  Boost::unit_test_framework
-  ${CMAKE_THREAD_LIBS_INIT}
-  )
-
-target_compile_options( lockfree_fifo_wild
-PRIVATE
-  -Wno-disabled-macro-expansion;
-  -Wno-global-constructors 
-  )
+# 
+# add_executable( lockfree_fifo_wild )
+# target_sources( lockfree_fifo_wild PRIVATE lockfree_fifo_wild.cc )
+# target_include_directories( lockfree_fifo_wild PRIVATE include )
+# target_link_libraries( lockfree_fifo_wild
+# PRIVATE
+#   Boost::unit_test_framework
+#   ${CMAKE_THREAD_LIBS_INIT}
+#   )
+# 
+# target_compile_options( lockfree_fifo_wild
+# PRIVATE
+#   -Wno-disabled-macro-expansion;
+#   -Wno-global-constructors 
+#   )
 
 # install(TARGETS lockfree_ut RUNTIME DESTINATION bin)

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <numeric>
 #include <future>
+#include <queue>
 
 struct message_t
   { 
@@ -36,19 +37,75 @@ struct message_t
 
 int64_t message_t::instance_counter = 0;
 
-using afifo_queue_type = ampi::afifo_queue_t<message_t>;
-
 static std::ostream & operator <<( std::ostream & stream, message_t sc )
   {
   stream << "id " << sc.id;
   return stream;
   }
+//---------------------------------------------------------------------------------------------
+#if 0
+BOOST_AUTO_TEST_CASE( lock_free_node_pool_test_single )
+{
+using node_pool_type = ampi::node_pool_t<int,3>;
+using node_type = node_pool_type::node_type;
+using pointer = node_type *;
+
+//start with very high index to overflow counter
+constexpr size_t diagnostic_begin_index = std::numeric_limits<size_t>::max() - node_pool_type::node_pool_size;
+node_pool_type npool{ diagnostic_begin_index };
+pointer prev_p {};
+
+  {
+  pointer p0 { npool.construct_node( 1 ) }; 
+  BOOST_REQUIRE( p0 != nullptr );
+  BOOST_REQUIRE( prev_p != p0 );
+  BOOST_REQUIRE_NO_THROW(npool.reuse_node( p0 ));
+  prev_p = p0;
+  }
+  {
+  pointer p1 { npool.construct_node( 2 ) }; 
+  BOOST_REQUIRE( p1 != nullptr );
+  BOOST_REQUIRE( prev_p != p1 );
+  prev_p = p1;
   
+  pointer p2 { npool.construct_node( 3 ) }; 
+  BOOST_REQUIRE( p2 != nullptr );
+  BOOST_REQUIRE( prev_p != p2 );
+  prev_p = p2;
+  BOOST_REQUIRE_NO_THROW(npool.reuse_node( p1 ));
+  BOOST_REQUIRE_NO_THROW(npool.reuse_node( p2 ));
+  }
+  {
+  std::queue<pointer> queue;
+  for( int count = 0; count != node_pool_type::node_pool_size; ++count)
+    {
+    for ( int i =0 ; i != count+1; ++i )
+      {
+      pointer p { npool.construct_node( 2 ) }; 
+      BOOST_REQUIRE( p != nullptr );
+      BOOST_REQUIRE( prev_p != p );
+      prev_p = p;
+      queue.push( p );
+      }
+    for ( int i =0 ; i != count+1; ++i )
+      {
+      pointer p { queue.front() };
+      BOOST_REQUIRE_NO_THROW(npool.reuse_node( p ) );
+      queue.pop();
+      }
+    }
+  }
+}
+#endif
+//---------------------------------------------------------------------------------------------  
+#if 1
+using afifo_type = ampi::afifo_t<message_t>;
+
 BOOST_AUTO_TEST_CASE( lock_free_afifo_test_single )
 {
   message_t::instance_counter  = 0;
   {
-  afifo_queue_type queue;
+        afifo_type queue;
   auto [it, succeed] { ampi::pull( queue ) };
   
   BOOST_TEST( !succeed );
@@ -88,7 +145,7 @@ BOOST_AUTO_TEST_CASE( lock_free_afifo_test_2threads )
 {
 message_t::instance_counter  = 0;
   {
-  afifo_queue_type queue;
+        afifo_type queue;
   uint64_t number_of_messages= 0x1FFFF;
   bool sender_finished {};
   
@@ -153,9 +210,9 @@ BOOST_AUTO_TEST_CASE( lock_free_afifo_test_multiple_threads )
 {
 message_t::instance_counter  = 0;
   {
-  afifo_queue_type queue;
+        afifo_type queue;
   uint64_t number_of_messages= 0xFFFF;
-  size_t number_of_senders = 16;
+  size_t number_of_senders = 8;
   bool sender_finished {};
   bool run {};
   
@@ -229,13 +286,16 @@ message_t::instance_counter  = 0;
   }
 BOOST_TEST( message_t::instance_counter == 0 );
 }
+#endif
 
-using lifo_type = ampi::lifo_queue_t<message_t>;
+//---------------------------------------------------------------------------------------------
+
+using stack_type = ampi::stack_t<message_t>;
 BOOST_AUTO_TEST_CASE( lock_free_lifo_test_single )
 {
 message_t::instance_counter  = 0;
   {
-  lifo_type queue;
+  stack_type queue;
   ampi::push( queue, message_t { 0 } );  
   
   message_t result;
@@ -277,7 +337,7 @@ BOOST_AUTO_TEST_CASE( lock_free_lifo_test_2threads )
 {
 message_t::instance_counter  = 0;
   {
-  lifo_type queue;
+  stack_type queue;
   uint64_t number_of_messages= 0x1FFFF;
   bool sender_finished {};
   
@@ -340,16 +400,16 @@ BOOST_AUTO_TEST_CASE( lock_free_lifo_test_multiple_threads )
 {
 message_t::instance_counter  = 0;
   {
-  lifo_type queue;
+  stack_type queue;
   uint64_t number_of_messages= 0x1FFFF;
-  bool sender_finished {};
-  bool run {};
-  constexpr size_t number_of_senders = 16;
+  std::atomic<bool> sender_finished {};
+  std::atomic<bool> run {};
+  constexpr size_t number_of_senders = 8;
   
   auto reciver = std::async(std::launch::async,
                            [&queue,number_of_messages,&sender_finished,&run]()
                            {
-                            while(! ampi::atomic_load( &run, ampi::memorder::relaxed) )
+                            while(! run.load() )
                               ampi::sleep(1);
                             
                            uint32_t last_message_nr{};
@@ -372,7 +432,7 @@ message_t::instance_counter  = 0;
                              else
                                ampi::sleep(1);
                             }
-                            while( !ampi::atomic_load( &sender_finished, ampi::memorder::acquire) || !queue.empty() );
+                            while( ! sender_finished.load() || !queue.empty() );
                             
                            BOOST_TEST( (number_of_messages * number_of_senders) == last_message_nr );
                            BOOST_TEST( expected_sum == sum );
@@ -381,7 +441,7 @@ message_t::instance_counter  = 0;
 //   ampi::sleep(1);
   auto fn_enqueue = [&queue,number_of_messages, &run]()
                     {
-                    while(! ampi::atomic_load( &run, ampi::memorder::relaxed) )
+                    while(!run.load() )
                       ampi::sleep(1);
                     
                     for( uint32_t i{}; i != number_of_messages; )
@@ -400,14 +460,14 @@ message_t::instance_counter  = 0;
   for( auto & sender : senders )
     sender = std::async(std::launch::async, fn_enqueue );
   
-  ampi::atomic_add_fetch( &run, true, ampi::memorder::acq_rel );
-//   printf("flags set\n");
+  run.store(true);
+  printf("flags set\n");
   
   for( auto & sender : senders )
     sender.get();
-//   printf("Senders send all data\n");
+  printf("Senders send all data\n");
   ampi::sleep(10);
-  ampi::atomic_add_fetch(&sender_finished,true, ampi::memorder::acq_rel );
+  sender_finished.store(true);
   reciver.get();
   BOOST_TEST( queue.empty() );
   BOOST_TEST( queue.size() == 0 );
@@ -415,6 +475,9 @@ message_t::instance_counter  = 0;
 BOOST_TEST( message_t::instance_counter == 0 );
 }
 
+//---------------------------------------------------------------------------------------------
+
+#if 1
 using fifo_type = ampi::fifo_queue_t<message_t>;
 BOOST_AUTO_TEST_CASE( lock_free_fifo_test_single )
 {
@@ -548,4 +611,4 @@ message_t::instance_counter  = 0;
   }
 BOOST_TEST( message_t::instance_counter == 0 );
 }
-
+#endif
