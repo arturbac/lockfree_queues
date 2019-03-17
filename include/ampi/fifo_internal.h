@@ -22,9 +22,12 @@
 //
 // Non-Blocking Concurrent Queue Algorithms, lock free
 
+
 #pragma once
 
 #include "common_utils.h"
+#include <array>
+#include <algorithm>
 
 namespace ampi
 {
@@ -71,16 +74,37 @@ namespace ampi
     using pointer_type = pointer_t<node_type>;
     using user_obj_ptr_type = user_obj_type *;
     using size_type = long;
-    
+    using reclaim_counter_type = uint32_t;
   private:
+    struct lock_counter_t
+      {
+      reclaim_counter_type 
+          counter : 31,
+          lock : 1;
+      };
+      
+    struct reclaimed_t
+      {
+      pointer_type pointer;
+      std::atomic<lock_counter_t> lock_counter;
+      };
+    using reaclaim_array_t = std::array<reclaimed_t,512>;
+    
     struct pimpl_t 
       {
-      std::atomic<pointer_type>  delayed_reclamtion_;
+      reaclaim_array_t                  delayed_reclamtion_;
+      std::atomic<reclaim_counter_type> reclaim_counter_;
       std::atomic<pointer_type>  head_;
       std::atomic<pointer_type>  tail_;
       std::atomic<size_type>     size_;
       
-      pimpl_t() : size_() {}
+      pimpl_t() : 
+          delayed_reclamtion_{},
+          reclaim_counter_{},
+          head_{},
+          tail_{},
+          size_{} 
+        {}
       };
     std::unique_ptr<pimpl_t>  data_;
       
@@ -99,21 +123,105 @@ namespace ampi
     user_obj_type * pull();
     
   private:
+    typename reaclaim_array_t::iterator oldest_store() noexcept;
     void delay_reclamation( pointer_type ptr );
+    pointer_type alloc();
   };
   
-
-  template<typename USER_OBJ_TYPE>
-  fifo_queue_internal_tmpl<USER_OBJ_TYPE>::fifo_queue_internal_tmpl()
-    : data_{ std::make_unique<typename fifo_queue_internal_tmpl<USER_OBJ_TYPE>::pimpl_t>() }
-  {
+  template<typename T>
+  typename fifo_queue_internal_tmpl<T>::reaclaim_array_t::iterator
+  fifo_queue_internal_tmpl<T>::oldest_store() noexcept
+    {
+    return std::min_element( std::begin(data_->delayed_reclamtion_), std::end(data_->delayed_reclamtion_),
+                          [](reclaimed_t const & l, reclaimed_t const & r)
+                          {
+                          lock_counter_t ll { l.lock_counter.load(std::memory_order_relaxed) };
+                          lock_counter_t rl { r.lock_counter.load(std::memory_order_relaxed) };
+                          if( ll.lock == rl.lock )
+                            return  ll.counter < rl.counter;
+                          return ll.lock < rl.lock;
+                          } );
+    }
+    
+  template<typename T>
+  fifo_queue_internal_tmpl<T>::fifo_queue_internal_tmpl() :
+      data_{ std::make_unique<pimpl_t>() }
+    {
     node_type * node = new node_type(); // Allocate a free node
                       // Make it the only node in the linked list
     data_->head_.store( pointer_type( node ) );
     data_->tail_.store( pointer_type( node ) );        // Both Head and Tail point to it
+    data_->reclaim_counter_ = 1;
     static_assert( sizeof(pointer_type) == 8, "64bit only supported TODO 32bit" );
-  }
+    for( reclaimed_t & el : data_->delayed_reclamtion_ )
+      el.lock_counter.store(lock_counter_t{0,0});
+    }
   
+  template<typename T>
+  typename fifo_queue_internal_tmpl<T>::pointer_type
+  fifo_queue_internal_tmpl<T>::alloc()
+    {
+    auto to_reuse { std::find_if(std::begin(data_->delayed_reclamtion_), std::end(data_->delayed_reclamtion_), 
+      []( reclaimed_t const & l )
+      {
+      lock_counter_t ll { l.lock_counter.load(std::memory_order_relaxed) };
+      return ll.lock == 0 && l.pointer.get() != nullptr;
+      }) };
+      
+    if( to_reuse != std::end(data_->delayed_reclamtion_) )
+      {
+      reclaimed_t & el { *to_reuse };
+      lock_counter_t lcexpected = el.lock_counter.load(std::memory_order_relaxed);
+      lock_counter_t lc_locked {lcexpected.counter, true };
+      if( el.lock_counter.compare_exchange_weak( lcexpected, lc_locked, std::memory_order_release, std::memory_order_relaxed ))
+        {
+        pointer_type reclaim{};
+        std::swap( el.pointer, reclaim );
+        lock_counter_t lc_unlocked { 0, false };
+        el.lock_counter.store( lc_unlocked, std::memory_order_release );
+        if( reclaim.get() != nullptr )
+          return reclaim;
+        }
+      }
+    return pointer_type{ new node_type() };
+    }
+  
+
+  template<typename T>
+  void fifo_queue_internal_tmpl<T>::delay_reclamation( pointer_type reclaim )
+    {
+    bool reclaimed {};
+    do
+      {
+      //find oldest reclaiming node with lowest counter and unlocked status;
+      auto oldest_to_reclaim { oldest_store() };
+      //try to swap it with own
+      reclaimed_t & el { *oldest_to_reclaim };
+      lock_counter_t lcexpected = el.lock_counter.load(std::memory_order_relaxed);
+//       printf("reclaim %ld ->%u\n", std::distance( std::begin(data_->delayed_reclamtion_), oldest_to_reclaim), lcexpected.counter );
+      if( !lcexpected.lock )
+        {
+        lock_counter_t lc_locked {lcexpected.counter, true };
+        if( el.lock_counter.compare_exchange_weak( lcexpected, lc_locked, std::memory_order_release, std::memory_order_relaxed ))
+          {
+          std::swap( el.pointer, reclaim );
+          lock_counter_t lc_unlocked {
+                      data_->reclaim_counter_.fetch_add( std::memory_order_acquire ),
+                      false };
+          el.lock_counter.store( lc_unlocked, std::memory_order_release );
+        
+          node_type * other_to_del { reclaim.get() };
+          if( other_to_del != nullptr )
+            delete other_to_del;
+          
+          reclaimed = true;
+          }
+        }
+      }
+    while(!reclaimed);
+// //       printf("reclaim %X", (uintptr_t)old.get() );
+    }
+    
   template<typename T>
   fifo_queue_internal_tmpl<T>::~fifo_queue_internal_tmpl()
     {
@@ -125,7 +233,12 @@ namespace ampi
       user_obj_type * any_data;
       while ((any_data = pull()) != nullptr);
       delete data_->head_.load().get();
-      delay_reclamation( pointer_type{} );
+//       delay_reclamation( pointer_type{} );
+      for( reclaimed_t & el : data_->delayed_reclamtion_ )
+        {
+        if( el.pointer.get () != nullptr )
+          delete el.pointer.get();
+        }
       }
     catch(...)
       {}
@@ -136,17 +249,18 @@ namespace ampi
     {
     pointer_type tail_local {};
     // Allocate a new node from the free list
-    
-    std::unique_ptr<node_type> node{ std::make_unique<node_type>( user_obj_ptr_type{user_data} ) };
-                                                                    // Set next pointer of node to NULL
-    for(;;)                                                     // Keep trying until Enqueue is done
+    node_type * node{ alloc().get() };
+    node->value = user_data; 
+    // Set next pointer of node to NULL
+    node->next = pointer_type{};
+    // Keep trying until Enqueue is done
+    for(;;)
       {
       // Read Tail.ptr and Tail.count together
       tail_local = data_->tail_.load( std::memory_order_relaxed );        
-      node_type * tail_local_ptr = tail_local.get();
     
       // Read next ptr and count fields together
-      pointer_type next { tail_local_ptr->next };      
+      pointer_type next { tail_local.get()->next };      
 
       // Are tail_local and next consistent?
       if ( tail_local ==  data_->tail_.load( std::memory_order_acquire ) )
@@ -155,19 +269,18 @@ namespace ampi
         if( next.get() == nullptr)
           {
           // Try to link node at the end of the linked list
-          if( tail_local->next.compare_exchange_strong( next, pointer_type{ node.get(), next.count() + 1 } ) )
+          if( tail_local->next.compare_exchange_strong( next, pointer_type{ node, next.count() + 1 }, std::memory_order_release, std::memory_order_relaxed ) )
             // Enqueue is done.  Exit loop
             break;      
           }
         // Tail was not pointing to the last node
         else
           // Try to swing Tail to the next node
-          data_->tail_.compare_exchange_strong( tail_local, pointer_type{ next.get(), tail_local.count() + 1 } );
+          data_->tail_.compare_exchange_strong( tail_local, pointer_type{ next.get(), tail_local.count() + 1 }, std::memory_order_release, std::memory_order_relaxed );
         }
       }
     // Enqueue is done.  Try to swing Tail to the inserted node
-    data_->tail_.compare_exchange_strong( tail_local, {node.get(), tail_local.count() + 1} );
-    node.release();
+    data_->tail_.compare_exchange_strong( tail_local, {node, tail_local.count() + 1} );
     data_->size_.fetch_add( size_type{1}, std::memory_order_relaxed );
     }
 
@@ -198,7 +311,7 @@ namespace ampi
           if ( next.get() == nullptr)
             return nullptr;  
           // Tail is falling behind.  Try to advance it
-          data_->tail_.compare_exchange_strong(tail, pointer_type{next.get(), tail.count() + 1} );
+          data_->tail_.compare_exchange_strong(tail, pointer_type{next.get(), tail.count() + 1}, std::memory_order_release, std::memory_order_relaxed );
           }
         else
           {
@@ -209,7 +322,7 @@ namespace ampi
             {
             pvalue = node_d->value;
             // Try to swing Head to the next node
-            if ( data_->head_.compare_exchange_strong( head, pointer_type{next.get(), head.count() + 1}))
+            if ( data_->head_.compare_exchange_strong( head, pointer_type{next.get(), head.count() + 1}, std::memory_order_release, std::memory_order_relaxed))
               break;
             pvalue = nullptr;
             }
@@ -225,18 +338,4 @@ namespace ampi
     return pvalue;   // Queue was not empty, dequeue succeeded
     }
 
-  template<typename T>
-  void fifo_queue_internal_tmpl<T>::delay_reclamation( pointer_type next_todel )
-    {
-    pointer_type old { data_->delayed_reclamtion_.load( std::memory_order_relaxed ) };
-    while( !data_->delayed_reclamtion_.compare_exchange_weak( old, next_todel, std::memory_order_release, std::memory_order_relaxed ) )
-      {
-      old = data_->delayed_reclamtion_.load( std::memory_order_relaxed );
-      }
-    if( old.get() != nullptr )
-      {
-      delete old.get();
-//       printf("reclaim %X", (uintptr_t)old.get() );
-      }
-    }
 }
