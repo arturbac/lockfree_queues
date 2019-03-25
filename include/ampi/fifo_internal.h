@@ -53,7 +53,8 @@ namespace ampi
     using user_obj_type = USER_OBJ_TYPE ;
     user_obj_type value;
     
-    queue_envelope_t( user_obj_type && v ) : value( std::forward<user_obj_type>(v)){}
+    queue_envelope_t( user_obj_type && v ) : value{ std::forward<user_obj_type>(v) }{}
+    queue_envelope_t( user_obj_type const & v ) : value{v} {}
     };
 
     
@@ -135,8 +136,8 @@ namespace ampi
     return std::min_element( std::begin(data_->delayed_reclamtion_), std::end(data_->delayed_reclamtion_),
                           [](reclaimed_t const & l, reclaimed_t const & r)
                           {
-                          lock_counter_t ll { l.lock_counter.load(std::memory_order_relaxed) };
-                          lock_counter_t rl { r.lock_counter.load(std::memory_order_relaxed) };
+                          lock_counter_t ll { l.lock_counter.load(std::memory_order_acquire) };
+                          lock_counter_t rl { r.lock_counter.load(std::memory_order_acquire) };
                           if( ll.lock == rl.lock )
                             return  ll.counter < rl.counter;
                           return ll.lock < rl.lock;
@@ -164,16 +165,16 @@ namespace ampi
     auto to_reuse { std::find_if(std::begin(data_->delayed_reclamtion_), std::end(data_->delayed_reclamtion_), 
       []( reclaimed_t const & l )
       {
-      lock_counter_t ll { l.lock_counter.load(std::memory_order_relaxed) };
+      lock_counter_t ll { l.lock_counter.load(std::memory_order_acquire) };
       return ll.lock == 0 && l.pointer.get() != nullptr;
       }) };
       
     if( to_reuse != std::end(data_->delayed_reclamtion_) )
       {
       reclaimed_t & el { *to_reuse };
-      lock_counter_t lcexpected = el.lock_counter.load(std::memory_order_relaxed);
+      lock_counter_t lcexpected = el.lock_counter.load(std::memory_order_acquire);
       lock_counter_t lc_locked {lcexpected.counter, true };
-      if( el.lock_counter.compare_exchange_weak( lcexpected, lc_locked, std::memory_order_release, std::memory_order_relaxed ))
+      if( el.lock_counter.compare_exchange_weak( lcexpected, lc_locked, std::memory_order_seq_cst ))
         {
         pointer_type reclaim{};
         std::swap( el.pointer, reclaim );
@@ -197,16 +198,16 @@ namespace ampi
       auto oldest_to_reclaim { oldest_store() };
       //try to swap it with own
       reclaimed_t & el { *oldest_to_reclaim };
-      lock_counter_t lcexpected = el.lock_counter.load(std::memory_order_relaxed);
+      lock_counter_t lcexpected = el.lock_counter.load(std::memory_order_acquire);
 //       printf("reclaim %ld ->%u\n", std::distance( std::begin(data_->delayed_reclamtion_), oldest_to_reclaim), lcexpected.counter );
       if( !lcexpected.lock )
         {
         lock_counter_t lc_locked {lcexpected.counter, true };
-        if( el.lock_counter.compare_exchange_weak( lcexpected, lc_locked, std::memory_order_release, std::memory_order_relaxed ))
+        if( el.lock_counter.compare_exchange_weak( lcexpected, lc_locked, std::memory_order_seq_cst ))
           {
           std::swap( el.pointer, reclaim );
           lock_counter_t lc_unlocked {
-                      data_->reclaim_counter_.fetch_add( std::memory_order_acquire ),
+                      data_->reclaim_counter_.fetch_add( std::memory_order_release ),
                       false };
           el.lock_counter.store( lc_unlocked, std::memory_order_release );
         
@@ -257,7 +258,7 @@ namespace ampi
     for(;;)
       {
       // Read Tail.ptr and Tail.count together
-      tail_local = data_->tail_.load( std::memory_order_relaxed );        
+      tail_local = data_->tail_.load( std::memory_order_acquire );        
     
       // Read next ptr and count fields together
       pointer_type next { tail_local.get()->next };      
@@ -269,19 +270,19 @@ namespace ampi
         if( next.get() == nullptr)
           {
           // Try to link node at the end of the linked list
-          if( tail_local->next.compare_exchange_strong( next, pointer_type{ node, next.count() + 1 }, std::memory_order_release, std::memory_order_relaxed ) )
+          if( tail_local->next.compare_exchange_strong( next, pointer_type{ node, next.count() + 1 }, std::memory_order_seq_cst ) )
             // Enqueue is done.  Exit loop
             break;      
           }
         // Tail was not pointing to the last node
         else
           // Try to swing Tail to the next node
-          data_->tail_.compare_exchange_strong( tail_local, pointer_type{ next.get(), tail_local.count() + 1 }, std::memory_order_release, std::memory_order_relaxed );
+          data_->tail_.compare_exchange_strong( tail_local, pointer_type{ next.get(), tail_local.count() + 1 }, std::memory_order_seq_cst );
         }
       }
     // Enqueue is done.  Try to swing Tail to the inserted node
     data_->tail_.compare_exchange_strong( tail_local, {node, tail_local.count() + 1} );
-    data_->size_.fetch_add( size_type{1}, std::memory_order_relaxed );
+    data_->size_.fetch_add( size_type{1}, std::memory_order_release );
     }
 
   template<typename T>
@@ -311,7 +312,7 @@ namespace ampi
           if ( next.get() == nullptr)
             return nullptr;  
           // Tail is falling behind.  Try to advance it
-          data_->tail_.compare_exchange_strong(tail, pointer_type{next.get(), tail.count() + 1}, std::memory_order_release, std::memory_order_relaxed );
+          data_->tail_.compare_exchange_strong(tail, pointer_type{next.get(), tail.count() + 1}, std::memory_order_seq_cst );
           }
         else
           {
@@ -322,7 +323,7 @@ namespace ampi
             {
             pvalue = node_d->value;
             // Try to swing Head to the next node
-            if ( data_->head_.compare_exchange_strong( head, pointer_type{next.get(), head.count() + 1}, std::memory_order_release, std::memory_order_relaxed))
+            if ( data_->head_.compare_exchange_strong( head, pointer_type{next.get(), head.count() + 1}, std::memory_order_seq_cst))
               break;
             pvalue = nullptr;
             }
@@ -334,7 +335,7 @@ namespace ampi
     // It is safe now to free the old node //heap-use-after-free
     delay_reclamation( head );
 
-    data_->size_.fetch_sub(size_type{1}, std::memory_order_relaxed );
+    data_->size_.fetch_sub(size_type{1}, std::memory_order_release );
     return pvalue;   // Queue was not empty, dequeue succeeded
     }
 
