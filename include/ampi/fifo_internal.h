@@ -207,7 +207,7 @@ namespace ampi
           {
           std::swap( el.pointer, reclaim );
           lock_counter_t lc_unlocked {
-                      data_->reclaim_counter_.fetch_add( std::memory_order_release ),
+                      data_->reclaim_counter_.fetch_add( 1, std::memory_order_release ),
                       false };
           el.lock_counter.store( lc_unlocked, std::memory_order_release );
         
