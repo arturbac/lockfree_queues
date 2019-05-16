@@ -13,4 +13,4 @@ in case of interest I'm open to port/check with gcc and lower requirements to c+
 
 # Status
 - stack, afifo are initialy finished and pass high contention tests in the wild or udner ASAN, have plans to extend tests
-- fifo_queue hs still problem with delayed reclamation
+- fifo_queue looks like it works ok even under testing heavy pressure
