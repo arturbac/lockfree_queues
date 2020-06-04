@@ -153,7 +153,7 @@ namespace ampi
         node_submitted = head_.compare_exchange_weak(last_head, next_node, std::memory_order_release, std::memory_order_relaxed  );
         }
       while(!node_submitted);
-      size_.store(std::memory_order_relaxed );
+      size_.fetch_add(1,std::memory_order_relaxed );
       }
     }
     
